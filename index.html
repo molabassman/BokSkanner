@@ -2,10 +2,10 @@
 <html lang="sv">
 <head>
   <meta charset="UTF-8">
-  <title>Bokskanner</title>
+  <title>Bokskanner ZXing</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-  <script src="https://unpkg.com/html5-qrcode"></script>
+  <script src="https://unpkg.com/@zxing/library@latest"></script>
 
   <style>
     body {
@@ -22,8 +22,9 @@
       box-sizing: border-box;
     }
 
-    #reader {
+    video {
       width: 100%;
+      border: 2px solid #333;
       margin-top: 12px;
     }
 
@@ -42,9 +43,9 @@
 </head>
 
 <body>
-  <h2>Bokskanner</h2>
+  <h2>Bokskanner ZXing</h2>
 
-  <input id="scannerName" placeholder="Namn/enhet, t.ex. ID1 eller APN">
+  <input id="scannerName" placeholder="Namn/enhet, t.ex. APN eller iPad 1">
   <input id="pin" placeholder="PIN-kod" type="password">
 
   <button onclick="startScanner()">Starta skanning</button>
@@ -56,12 +57,12 @@
     Status: <span id="status">Inte startad</span>
   </div>
 
-  <div id="reader"></div>
+  <video id="video" playsinline></video>
 
   <script>
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx0baZLvVG7AbzFTkiqKHAyudRXbMNBFjwXHLHteyVcot7Sdb0DJLMLUGojp3p8wT4/exec";
 
-    let html5QrCode;
+    let codeReader;
     let count = 0;
     let lastScan = "";
     let lastScanTime = 0;
@@ -76,70 +77,85 @@
         return;
       }
 
-      html5QrCode = new Html5Qrcode("reader");
+      setStatus("Startar kamera...");
 
-        const config = {
-          fps: 20,
-          qrbox: { width: 280, height: 160 },
-          experimentalFeatures: {
-            useBarCodeDetectorIfSupported: true
-          },
-          formatsToSupport: [
-            Html5QrcodeSupportedFormats.CODE_128,
-            Html5QrcodeSupportedFormats.CODE_39,
-            Html5QrcodeSupportedFormats.CODE_93,
-            Html5QrcodeSupportedFormats.CODABAR,
-            Html5QrcodeSupportedFormats.ITF,
-            Html5QrcodeSupportedFormats.EAN_13,
-            Html5QrcodeSupportedFormats.EAN_8
-          ]
-        };
+      const hints = new Map();
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+        ZXing.BarcodeFormat.CODE_128,
+        ZXing.BarcodeFormat.CODE_39,
+        ZXing.BarcodeFormat.CODE_93,
+        ZXing.BarcodeFormat.CODABAR,
+        ZXing.BarcodeFormat.ITF,
+        ZXing.BarcodeFormat.EAN_13,
+        ZXing.BarcodeFormat.EAN_8,
+        ZXing.BarcodeFormat.UPC_A,
+        ZXing.BarcodeFormat.UPC_E
+      ]);
 
-      await html5QrCode.start(
-        { facingMode: "environment" },
-        config,
-        onScanSuccess
+      codeReader = new ZXing.BrowserMultiFormatReader(hints);
+
+      const devices = await codeReader.listVideoInputDevices();
+
+      let selectedDeviceId = devices[0].deviceId;
+
+      const backCamera = devices.find(device =>
+        device.label.toLowerCase().includes("back") ||
+        device.label.toLowerCase().includes("rear") ||
+        device.label.toLowerCase().includes("environment")
+      );
+
+      if (backCamera) {
+        selectedDeviceId = backCamera.deviceId;
+      }
+
+      codeReader.decodeFromVideoDevice(
+        selectedDeviceId,
+        "video",
+        async (result, err) => {
+          if (result) {
+            await onScanSuccess(result.getText());
+          }
+        }
       );
 
       setStatus("Skanning igång");
     }
 
-    async function stopScanner() {
-      if (html5QrCode) {
-        await html5QrCode.stop();
+    function stopScanner() {
+      if (codeReader) {
+        codeReader.reset();
         setStatus("Pausad");
       }
     }
 
     async function onScanSuccess(decodedText) {
       const now = Date.now();
-      const isbn = cleanBarcode(decodedText);
+      const barcode = cleanBarcode(decodedText);
 
-      if (!isbn) return;
+      if (!barcode) return;
 
-      // Stoppar samma bok från att registreras flera gånger direkt
-      if (isbn === lastScan && now - lastScanTime < 3000) {
+      if (barcode === lastScan && now - lastScanTime < 3000) {
         return;
       }
 
       if (isSending) return;
 
-      lastScan = isbn;
+      lastScan = barcode;
       lastScanTime = now;
       isSending = true;
 
-      document.getElementById("last").textContent = isbn;
+      document.getElementById("last").textContent = barcode;
       setStatus("Skickar...");
 
       try {
-        const result = await fetch(SCRIPT_URL, {
+        await fetch(SCRIPT_URL, {
           method: "POST",
           mode: "no-cors",
           headers: {
             "Content-Type": "text/plain"
           },
           body: JSON.stringify({
-            isbn: isbn,
+            isbn: barcode,
             scanner: document.getElementById("scannerName").value.trim(),
             pin: document.getElementById("pin").value.trim()
           })
