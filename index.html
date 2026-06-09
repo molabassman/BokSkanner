@@ -2,10 +2,11 @@
 <html lang="sv">
 <head>
   <meta charset="UTF-8">
-  <title>Bokskanner ZXing</title>
+  <title>Bokskanner</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
   <script src="https://unpkg.com/@zxing/library@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
   <style>
     body {
@@ -22,10 +23,26 @@
       box-sizing: border-box;
     }
 
+    #videoWrap {
+      position: relative;
+      width: 100%;
+    }
+
     video {
       width: 100%;
       border: 2px solid #333;
       margin-top: 12px;
+    }
+
+    #ocrBox {
+      position: absolute;
+      left: 22%;
+      top: 38%;
+      width: 56%;
+      height: 13%;
+      border: 3px solid red;
+      box-sizing: border-box;
+      pointer-events: none;
     }
 
     .status {
@@ -38,18 +55,20 @@
     .big {
       font-size: 24px;
       font-weight: bold;
+      word-break: break-all;
     }
   </style>
 </head>
 
 <body>
-  <h2>Bokskanner ZXing</h2>
+  <h2>Bokskanner</h2>
 
-  <input id="scannerName" placeholder="Namn/enhet, t.ex. APN eller iPad 1">
+  <input id="scannerName" placeholder="Namn/enhet, t.ex. A1 eller iPad 1">
   <input id="pin" placeholder="PIN-kod" type="password">
 
   <button onclick="startScanner()">Starta skanning</button>
   <button onclick="stopScanner()">Pausa</button>
+  <button onclick="readOcr()">Läs siffror med OCR</button>
 
   <div class="status">
     Senast: <span id="last" class="big">–</span><br>
@@ -57,7 +76,12 @@
     Status: <span id="status">Inte startad</span>
   </div>
 
-  <video id="video" playsinline></video>
+  <div id="videoWrap">
+    <video id="video" playsinline></video>
+    <div id="ocrBox"></div>
+  </div>
+
+  <canvas id="ocrCanvas" style="display:none;"></canvas>
 
   <script>
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx0baZLvVG7AbzFTkiqKHAyudRXbMNBFjwXHLHteyVcot7Sdb0DJLMLUGojp3p8wT4/exec";
@@ -95,7 +119,6 @@
       codeReader = new ZXing.BrowserMultiFormatReader(hints);
 
       const devices = await codeReader.listVideoInputDevices();
-
       let selectedDeviceId = devices[0].deviceId;
 
       const backCamera = devices.find(device =>
@@ -113,7 +136,7 @@
         "video",
         async (result, err) => {
           if (result) {
-            await onScanSuccess(result.getText());
+            await onScanSuccess(cleanBarcode(result.getText()), "streckkod");
           }
         }
       );
@@ -128,9 +151,69 @@
       }
     }
 
-    async function onScanSuccess(decodedText) {
+    async function readOcr() {
+      const video = document.getElementById("video");
+      const canvas = document.getElementById("ocrCanvas");
+      const ctx = canvas.getContext("2d");
+
+      if (!video.videoWidth || !video.videoHeight) {
+        setStatus("Kameran är inte redo");
+        return;
+      }
+
+      const sx = video.videoWidth * 0.22;
+      const sy = video.videoHeight * 0.38;
+      const sw = video.videoWidth * 0.56;
+      const sh = video.videoHeight * 0.13;
+
+      canvas.width = sw;
+      canvas.height = sh;
+
+      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+
+      setStatus("Läser text med OCR...");
+
+      try {
+        const result = await Tesseract.recognize(canvas, "eng", {
+          tessedit_char_whitelist: "0123456789 "
+        });
+
+        const text = result.data.text;
+        const code = extractLibraryCode(text);
+
+        if (!code) {
+          setStatus("Hittade ingen 11-siffrig kod");
+          return;
+        }
+
+        await onScanSuccess(code, "OCR");
+
+      } catch (err) {
+        setStatus("OCR-fel: " + err.message);
+      }
+    }
+
+    function extractLibraryCode(text) {
+      const onlyDigits = String(text).replace(/\D/g, "");
+
+      // Letar efter 11 siffror som börjar med 800
+      const match = onlyDigits.match(/800\d{8}/);
+
+      if (match) {
+        return match[0];
+      }
+
+      return null;
+    }
+
+    function cleanBarcode(value) {
+      return String(value)
+        .trim()
+        .replace(/\s+/g, "");
+    }
+
+    async function onScanSuccess(barcode, source) {
       const now = Date.now();
-      const barcode = cleanBarcode(decodedText);
 
       if (!barcode) return;
 
@@ -145,7 +228,7 @@
       isSending = true;
 
       document.getElementById("last").textContent = barcode;
-      setStatus("Skickar...");
+      setStatus("Skickar " + source + "...");
 
       try {
         await fetch(SCRIPT_URL, {
@@ -163,7 +246,7 @@
 
         count++;
         document.getElementById("count").textContent = count;
-        setStatus("Sparad");
+        setStatus("Sparad: " + barcode);
 
         if (navigator.vibrate) navigator.vibrate(100);
         beep();
@@ -175,12 +258,6 @@
       setTimeout(() => {
         isSending = false;
       }, 800);
-    }
-
-    function cleanBarcode(value) {
-      return String(value)
-        .trim()
-        .replace(/\s+/g, " ");
     }
 
     function setStatus(text) {
