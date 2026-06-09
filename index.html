@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8">
+  <title>Bokskanner</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <script src="https://unpkg.com/html5-qrcode"></script>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 16px;
+      max-width: 600px;
+    }
+
+    input, button {
+      font-size: 18px;
+      padding: 10px;
+      margin: 6px 0;
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    #reader {
+      width: 100%;
+      margin-top: 12px;
+    }
+
+    .status {
+      font-size: 18px;
+      margin-top: 12px;
+      padding: 10px;
+      background: #eee;
+    }
+
+    .big {
+      font-size: 24px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+
+<body>
+  <h2>Bokskanner</h2>
+
+  <input id="scannerName" placeholder="Namn/enhet, t.ex. Anders eller iPad 1">
+  <input id="pin" placeholder="PIN-kod" type="password">
+
+  <button onclick="startScanner()">Starta skanning</button>
+  <button onclick="stopScanner()">Pausa</button>
+
+  <div class="status">
+    Senast: <span id="last" class="big">–</span><br>
+    Antal: <span id="count">0</span><br>
+    Status: <span id="status">Inte startad</span>
+  </div>
+
+  <div id="reader"></div>
+
+  <script>
+    const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx0baZLvVG7AbzFTkiqKHAyudRXbMNBFjwXHLHteyVcot7Sdb0DJLMLUGojp3p8wT4/exec";
+
+    let html5QrCode;
+    let count = 0;
+    let lastScan = "";
+    let lastScanTime = 0;
+    let isSending = false;
+
+    async function startScanner() {
+      const scannerName = document.getElementById("scannerName").value.trim();
+      const pin = document.getElementById("pin").value.trim();
+
+      if (!scannerName || !pin) {
+        setStatus("Skriv namn/enhet och PIN först");
+        return;
+      }
+
+      html5QrCode = new Html5Qrcode("reader");
+
+      const config = {
+        fps: 10,
+        qrbox: { width: 280, height: 160 },
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.UPC_A,
+          Html5QrcodeSupportedFormats.UPC_E
+        ]
+      };
+
+      await html5QrCode.start(
+        { facingMode: "environment" },
+        config,
+        onScanSuccess
+      );
+
+      setStatus("Skanning igång");
+    }
+
+    async function stopScanner() {
+      if (html5QrCode) {
+        await html5QrCode.stop();
+        setStatus("Pausad");
+      }
+    }
+
+    async function onScanSuccess(decodedText) {
+      const now = Date.now();
+      const isbn = cleanBarcode(decodedText);
+
+      if (!isbn) return;
+
+      // Stoppar samma bok från att registreras flera gånger direkt
+      if (isbn === lastScan && now - lastScanTime < 3000) {
+        return;
+      }
+
+      if (isSending) return;
+
+      lastScan = isbn;
+      lastScanTime = now;
+      isSending = true;
+
+      document.getElementById("last").textContent = isbn;
+      setStatus("Skickar...");
+
+      try {
+        const result = await fetch(SCRIPT_URL, {
+          method: "POST",
+          mode: "no-cors",
+          headers: {
+            "Content-Type": "text/plain"
+          },
+          body: JSON.stringify({
+            isbn: isbn,
+            scanner: document.getElementById("scannerName").value.trim(),
+            pin: document.getElementById("pin").value.trim()
+          })
+        });
+
+        count++;
+        document.getElementById("count").textContent = count;
+        setStatus("Sparad");
+
+        if (navigator.vibrate) navigator.vibrate(100);
+        beep();
+
+      } catch (err) {
+        setStatus("Fel: " + err.message);
+      }
+
+      setTimeout(() => {
+        isSending = false;
+      }, 800);
+    }
+
+    function cleanBarcode(value) {
+      return String(value).replace(/\D/g, "");
+    }
+
+    function setStatus(text) {
+      document.getElementById("status").textContent = text;
+    }
+
+    function beep() {
+      const audioCtx = new AudioContext();
+      const oscillator = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+
+      oscillator.connect(gain);
+      gain.connect(audioCtx.destination);
+
+      oscillator.frequency.value = 880;
+      gain.gain.value = 0.1;
+
+      oscillator.start();
+      oscillator.stop(audioCtx.currentTime + 0.08);
+    }
+  </script>
+</body>
+</html>
