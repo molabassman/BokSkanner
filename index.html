@@ -11,14 +11,21 @@
   <style>
     body {
       font-family: Arial, sans-serif;
-      margin: 16px;
-      max-width: 600px;
+      margin: 0;
+      padding: 10px;
+      box-sizing: border-box;
+      padding-bottom: 150px;
     }
 
-    input, button {
-      font-size: 18px;
-      padding: 10px;
-      margin: 6px 0;
+    h2 {
+      margin: 6px 0 8px 0;
+      font-size: 22px;
+    }
+
+    input {
+      font-size: 16px;
+      padding: 8px;
+      margin: 4px 0;
       width: 100%;
       box-sizing: border-box;
     }
@@ -26,12 +33,13 @@
     #videoWrap {
       position: relative;
       width: 100%;
+      margin-top: 8px;
     }
 
     video {
       width: 100%;
       border: 2px solid #333;
-      margin-top: 12px;
+      display: block;
     }
 
     #ocrBox {
@@ -46,16 +54,42 @@
     }
 
     .status {
-      font-size: 18px;
-      margin-top: 12px;
-      padding: 10px;
+      font-size: 16px;
+      margin-top: 8px;
+      padding: 8px;
       background: #eee;
     }
 
     .big {
-      font-size: 24px;
+      font-size: 22px;
       font-weight: bold;
       word-break: break-all;
+    }
+
+    #bottomButtons {
+      position: fixed;
+      left: 0;
+      bottom: 0;
+      width: 100%;
+      background: white;
+      border-top: 2px solid #ccc;
+      padding: 10px;
+      box-sizing: border-box;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      z-index: 10;
+    }
+
+    button {
+      font-size: 18px;
+      padding: 14px 8px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    #ocrButton {
+      font-weight: bold;
     }
   </style>
 </head>
@@ -63,36 +97,41 @@
 <body>
   <h2>Bokskanner</h2>
 
-  <input id="scannerName" placeholder="Namn/enhet, t.ex. A1 eller iPad 1">
+  <input id="scannerName" placeholder="Namn/enhet, t.ex. AA eller iPad 1">
   <input id="pin" placeholder="PIN-kod" type="password">
-
-  <button onclick="startScanner()">Starta skanning</button>
-  <button onclick="stopScanner()">Pausa</button>
-  <button onclick="readOcr()">Läs siffror med OCR</button>
-
-  <div class="status">
-    Senast: <span id="last" class="big">–</span><br>
-    Antal: <span id="count">0</span><br>
-    Status: <span id="status">Inte startad</span>
-  </div>
 
   <div id="videoWrap">
     <video id="video" playsinline></video>
     <div id="ocrBox"></div>
   </div>
 
+  <div class="status">
+    Senast: <span id="last" class="big">–</span><br>
+    Antal: <span id="count">0</span><br>
+    Status: <span id="status">Starta kameran längst ned</span>
+  </div>
+
   <canvas id="ocrCanvas" style="display:none;"></canvas>
+
+  <div id="bottomButtons">
+    <button onclick="startCamera()">Starta kamera</button>
+    <button onclick="stopCamera()">Pausa</button>
+    <button id="ocrButton" onclick="readOcr()">Skanna OCR</button>
+    <button onclick="scanBarcodeOnce()">Skanna streckkod</button>
+  </div>
 
   <script>
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx0baZLvVG7AbzFTkiqKHAyudRXbMNBFjwXHLHteyVcot7Sdb0DJLMLUGojp3p8wT4/exec";
 
     let codeReader;
+    let selectedDeviceId = null;
     let count = 0;
     let lastScan = "";
     let lastScanTime = 0;
     let isSending = false;
+    let cameraStarted = false;
 
-    async function startScanner() {
+    async function startCamera() {
       const scannerName = document.getElementById("scannerName").value.trim();
       const pin = document.getElementById("pin").value.trim();
 
@@ -103,55 +142,50 @@
 
       setStatus("Startar kamera...");
 
-      const hints = new Map();
-      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-        ZXing.BarcodeFormat.CODE_128,
-        ZXing.BarcodeFormat.CODE_39,
-        ZXing.BarcodeFormat.CODE_93,
-        ZXing.BarcodeFormat.CODABAR,
-        ZXing.BarcodeFormat.ITF,
-        ZXing.BarcodeFormat.EAN_13,
-        ZXing.BarcodeFormat.EAN_8,
-        ZXing.BarcodeFormat.UPC_A,
-        ZXing.BarcodeFormat.UPC_E
-      ]);
+      try {
+        codeReader = new ZXing.BrowserMultiFormatReader();
 
-      codeReader = new ZXing.BrowserMultiFormatReader(hints);
+        const devices = await codeReader.listVideoInputDevices();
+        selectedDeviceId = devices[0].deviceId;
 
-      const devices = await codeReader.listVideoInputDevices();
-      let selectedDeviceId = devices[0].deviceId;
+        const backCamera = devices.find(device =>
+          device.label.toLowerCase().includes("back") ||
+          device.label.toLowerCase().includes("rear") ||
+          device.label.toLowerCase().includes("environment")
+        );
 
-      const backCamera = devices.find(device =>
-        device.label.toLowerCase().includes("back") ||
-        device.label.toLowerCase().includes("rear") ||
-        device.label.toLowerCase().includes("environment")
-      );
-
-      if (backCamera) {
-        selectedDeviceId = backCamera.deviceId;
-      }
-
-      codeReader.decodeFromVideoDevice(
-        selectedDeviceId,
-        "video",
-        async (result, err) => {
-          if (result) {
-            await onScanSuccess(cleanBarcode(result.getText()), "streckkod");
-          }
+        if (backCamera) {
+          selectedDeviceId = backCamera.deviceId;
         }
-      );
 
-      setStatus("Skanning igång");
+        await codeReader.decodeFromVideoDevice(
+          selectedDeviceId,
+          "video",
+          () => {}
+        );
+
+        cameraStarted = true;
+        setStatus("Kameran är igång. Tryck Skanna OCR.");
+      } catch (err) {
+        setStatus("Kamerafel: " + err.message);
+      }
     }
 
-    function stopScanner() {
+    function stopCamera() {
       if (codeReader) {
         codeReader.reset();
-        setStatus("Pausad");
       }
+
+      cameraStarted = false;
+      setStatus("Pausad");
     }
 
     async function readOcr() {
+      if (!cameraStarted) {
+        setStatus("Starta kameran först");
+        return;
+      }
+
       const video = document.getElementById("video");
       const canvas = document.getElementById("ocrCanvas");
       const ctx = canvas.getContext("2d");
@@ -171,7 +205,7 @@
 
       ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
 
-      setStatus("Läser text med OCR...");
+      setStatus("Läser OCR...");
 
       try {
         const result = await Tesseract.recognize(canvas, "eng", {
@@ -187,16 +221,51 @@
         }
 
         await onScanSuccess(code, "OCR");
-
       } catch (err) {
         setStatus("OCR-fel: " + err.message);
+      }
+    }
+
+    async function scanBarcodeOnce() {
+      if (!cameraStarted) {
+        setStatus("Starta kameran först");
+        return;
+      }
+
+      setStatus("Letar streckkod...");
+
+      try {
+        const hints = new Map();
+        hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+          ZXing.BarcodeFormat.CODE_128,
+          ZXing.BarcodeFormat.CODE_39,
+          ZXing.BarcodeFormat.CODE_93,
+          ZXing.BarcodeFormat.CODABAR,
+          ZXing.BarcodeFormat.ITF,
+          ZXing.BarcodeFormat.EAN_13,
+          ZXing.BarcodeFormat.EAN_8,
+          ZXing.BarcodeFormat.UPC_A,
+          ZXing.BarcodeFormat.UPC_E
+        ]);
+
+        const singleReader = new ZXing.BrowserMultiFormatReader(hints);
+
+        const result = await singleReader.decodeOnceFromVideoDevice(
+          selectedDeviceId,
+          "video"
+        );
+
+        singleReader.reset();
+
+        await onScanSuccess(cleanBarcode(result.getText()), "streckkod");
+      } catch (err) {
+        setStatus("Ingen streckkod hittad");
       }
     }
 
     function extractLibraryCode(text) {
       const onlyDigits = String(text).replace(/\D/g, "");
 
-      // Letar efter 11 siffror som börjar med 800
       const match = onlyDigits.match(/800\d{8}/);
 
       if (match) {
@@ -218,6 +287,7 @@
       if (!barcode) return;
 
       if (barcode === lastScan && now - lastScanTime < 3000) {
+        setStatus("Samma kod ignorerad: " + barcode);
         return;
       }
 
@@ -250,7 +320,6 @@
 
         if (navigator.vibrate) navigator.vibrate(100);
         beep();
-
       } catch (err) {
         setStatus("Fel: " + err.message);
       }
