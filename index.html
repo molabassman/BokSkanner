@@ -30,24 +30,31 @@
       box-sizing: border-box;
     }
 
-    #videoWrap {
+   #videoWrap {
       position: relative;
       width: 100%;
+      height: 260px;
       margin-top: 8px;
+      background: #000;
+      border: 2px solid #333;
+      overflow: hidden;
+      box-sizing: border-box;
     }
-
+    
     video {
       width: 100%;
-      border: 2px solid #333;
+      height: 100%;
+      object-fit: cover;
       display: block;
     }
-
+    
+    /* Större OCR-ruta, men videorutan behåller samma storlek */
     #ocrBox {
       position: absolute;
-      left: 22%;
-      top: 38%;
-      width: 56%;
-      height: 13%;
+      left: 15%;
+      top: 34%;
+      width: 70%;
+      height: 20%;
       border: 3px solid red;
       box-sizing: border-box;
       pointer-events: none;
@@ -130,55 +137,51 @@
     let lastScanTime = 0;
     let isSending = false;
     let cameraStarted = false;
+    let cameraStream = null;
 
-    async function startCamera() {
-      const scannerName = document.getElementById("scannerName").value.trim();
-      const pin = document.getElementById("pin").value.trim();
+async function startCamera() {
+  const scannerName = document.getElementById("scannerName").value.trim();
+  const pin = document.getElementById("pin").value.trim();
 
-      if (!scannerName || !pin) {
-        setStatus("Skriv namn/enhet och PIN först");
-        return;
-      }
+  if (!scannerName || !pin) {
+    setStatus("Skriv namn/enhet och PIN först");
+    return;
+  }
 
-      setStatus("Startar kamera...");
+  setStatus("Startar kamera...");
 
-      try {
-        codeReader = new ZXing.BrowserMultiFormatReader();
+  try {
+    const video = document.getElementById("video");
 
-        const devices = await codeReader.listVideoInputDevices();
-        selectedDeviceId = devices[0].deviceId;
+    cameraStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: "environment"
+      },
+      audio: false
+    });
 
-        const backCamera = devices.find(device =>
-          device.label.toLowerCase().includes("back") ||
-          device.label.toLowerCase().includes("rear") ||
-          device.label.toLowerCase().includes("environment")
-        );
+    video.srcObject = cameraStream;
+    await video.play();
 
-        if (backCamera) {
-          selectedDeviceId = backCamera.deviceId;
-        }
+    cameraStarted = true;
+    setStatus("Kameran är igång. Tryck Skanna OCR.");
+  } catch (err) {
+    setStatus("Kamerafel: " + err.message);
+  }
+}
 
-        await codeReader.decodeFromVideoDevice(
-          selectedDeviceId,
-          "video",
-          () => {}
-        );
+function stopCamera() {
+  const video = document.getElementById("video");
 
-        cameraStarted = true;
-        setStatus("Kameran är igång. Tryck Skanna OCR.");
-      } catch (err) {
-        setStatus("Kamerafel: " + err.message);
-      }
-    }
+  if (cameraStream) {
+    cameraStream.getTracks().forEach(track => track.stop());
+    cameraStream = null;
+  }
 
-    function stopCamera() {
-      if (codeReader) {
-        codeReader.reset();
-      }
-
-      cameraStarted = false;
-      setStatus("Pausad");
-    }
+  video.srcObject = null;
+  cameraStarted = false;
+  setStatus("Pausad");
+}
 
     async function readOcr() {
       if (!cameraStarted) {
@@ -195,10 +198,10 @@
         return;
       }
 
-      const sx = video.videoWidth * 0.22;
-      const sy = video.videoHeight * 0.38;
-      const sw = video.videoWidth * 0.56;
-      const sh = video.videoHeight * 0.13;
+      const sx = video.videoWidth * 0.15;
+      const sy = video.videoHeight * 0.34;
+      const sw = video.videoWidth * 0.70;
+      const sh = video.videoHeight * 0.20;
 
       canvas.width = sw;
       canvas.height = sh;
@@ -226,54 +229,53 @@
       }
     }
 
-    async function scanBarcodeOnce() {
-      if (!cameraStarted) {
-        setStatus("Starta kameran först");
-        return;
-      }
+async function scanBarcodeOnce() {
+  if (!cameraStarted) {
+    setStatus("Starta kameran först");
+    return;
+  }
 
-      setStatus("Letar streckkod...");
+  setStatus("Letar streckkod...");
 
-      try {
-        const hints = new Map();
-        hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-          ZXing.BarcodeFormat.CODE_128,
-          ZXing.BarcodeFormat.CODE_39,
-          ZXing.BarcodeFormat.CODE_93,
-          ZXing.BarcodeFormat.CODABAR,
-          ZXing.BarcodeFormat.ITF,
-          ZXing.BarcodeFormat.EAN_13,
-          ZXing.BarcodeFormat.EAN_8,
-          ZXing.BarcodeFormat.UPC_A,
-          ZXing.BarcodeFormat.UPC_E
-        ]);
+  try {
+    const video = document.getElementById("video");
 
-        const singleReader = new ZXing.BrowserMultiFormatReader(hints);
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+      ZXing.BarcodeFormat.CODE_128,
+      ZXing.BarcodeFormat.CODE_39,
+      ZXing.BarcodeFormat.CODE_93,
+      ZXing.BarcodeFormat.CODABAR,
+      ZXing.BarcodeFormat.ITF,
+      ZXing.BarcodeFormat.EAN_13,
+      ZXing.BarcodeFormat.EAN_8,
+      ZXing.BarcodeFormat.UPC_A,
+      ZXing.BarcodeFormat.UPC_E
+    ]);
 
-        const result = await singleReader.decodeOnceFromVideoDevice(
-          selectedDeviceId,
-          "video"
-        );
+    const reader = new ZXing.BrowserMultiFormatReader(hints);
+    const result = await reader.decodeOnceFromVideoElement(video);
 
-        singleReader.reset();
+    reader.reset();
 
-        await onScanSuccess(cleanBarcode(result.getText()), "streckkod");
-      } catch (err) {
-        setStatus("Ingen streckkod hittad");
-      }
-    }
+    await onScanSuccess(cleanBarcode(result.getText()), "streckkod");
+  } catch (err) {
+    setStatus("Ingen streckkod hittad");
+  }
+}
 
-    function extractLibraryCode(text) {
-      const onlyDigits = String(text).replace(/\D/g, "");
+function extractLibraryCode(text) {
+  const onlyDigits = String(text).replace(/\D/g, "");
 
-      const match = onlyDigits.match(/800\d{8}/);
+  // Tar exakt första 11-siffriga bibliotekskoden som börjar med 800
+  const match = onlyDigits.match(/800\d{8}/);
 
-      if (match) {
-        return match[0];
-      }
+  if (!match) {
+    return null;
+  }
 
-      return null;
-    }
+  return match[0].slice(0, 11);
+}
 
     function cleanBarcode(value) {
       return String(value)
